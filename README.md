@@ -31,6 +31,11 @@ g++ -o client client.cpp -lpthread
 </br>
 To add more clients run the client file in new terminal windows.
 
+#### Server Log
+To view the server log of the last server run or the server log of the current server run till now, run:
+
+`echo -ne $(cat serverlog.txt | sed  's/$/\\n/' | sed 's/ /\\a /g')`
+
 ## Project Details
 
 The project uses threads library, which is an OS dependent library(Linux). The server uses socket programming to
