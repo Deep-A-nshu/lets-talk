@@ -1,139 +1,203 @@
-#include <bits/stdc++.h>
-#include <sys/types.h>
+#include <iostream>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <errno.h>
-#include <string.h>
-#include <arpa/inet.h>
 #include <unistd.h>
-#include <thread>
+#include <arpa/inet.h>
+#include <string.h>
 #include <pthread.h>
-#include <signal.h>
-#include <mutex>
-#define MAX_LEN 200
-#define NUM_COLORS 6
+
 using namespace std;
 
-bool exit_flag=false;
-thread t_send, t_recv;
-int client_socket;
-string def_col="\033[0m";
-string colors[]={"\033[31m", "\033[32m", "\033[33m", "\033[34m", "\033[35m", "\033[36m"};
+#define MAX_CLIENTS 70
+#define USERNAME_LENGTH 32
+#define BUFFER_LENGTH 2048
 
-void catch_ctrl_c(int signal);
-string color(int code);
-int eraseText(int cnt);
-void send_message(int client_socket);
-void recv_message(int client_socket);
+const char* colour_list[]={"30","33","34","35","36","37","90","93","94","95","96","97"};
+volatile int clr;
+volatile sig_atomic_t flag=0;
+char username[USERNAME_LENGTH];
 
-int main()
-{
-	if((client_socket=socket(AF_INET,SOCK_STREAM,0))==-1)
-	{
-		perror("socket: ");
-		exit(-1);
-	}
 
-	struct sockaddr_in client;
-	client.sin_family=AF_INET;
-	client.sin_port=htons(10000); // Port no. of server
-	client.sin_addr.s_addr=INADDR_ANY;
-	bzero(&client.sin_zero,0);
-
-	if((connect(client_socket,(struct sockaddr *)&client,sizeof(struct sockaddr_in)))==-1)
-	{
-		perror("connect: ");
-		exit(-1);
-	}
-	signal(SIGINT, catch_ctrl_c);
-	char name[MAX_LEN];
-	cout<<"Enter your name : ";
-	cin.getline(name,MAX_LEN);
-	send(client_socket,name,sizeof(name),0);
-
-	cout << colors[NUM_COLORS-1]<<"\n\t=============CHAT ROOM============"<<"\n"<<def_col;
-
-	thread t1(send_message, client_socket);
-	thread t2(recv_message, client_socket);
-
-	t_send=move(t1);
-	t_recv=move(t2);
-
-	if(t_send.joinable())
-		t_send.join();
-	if(t_recv.joinable())
-		t_recv.join();
-			
-	return 0;
+void catch_exit(){
+    flag=1;
 }
 
-// Handler for "Ctrl + C"
-void catch_ctrl_c(int signal) 
-{
-	char str[MAX_LEN]="#exit";
-	send(client_socket,str,sizeof(str),0);
-	exit_flag=true;
-	t_send.detach();
-	t_recv.detach();
-	close(client_socket);
-	exit(signal);
+
+//Method to add > before any new message seen by client
+void output_designer(){
+    cout<<"\r>";
+    cout.flush();
 }
 
-string color(int code)
-{
-	return colors[code%NUM_COLORS];
+
+//Method to remove newline character '\n' from end of message
+void remove_newline(char* msg, int length){
+    for(int i=0;i<length;i++){
+        if(msg[i]=='\n'){
+            msg[i]='\0';
+            break;
+        }
+    }
 }
 
-// Erase text from terminal
-int eraseText(int cnt)
-{
-	char back_space=8;
-	for(int i=0; i<cnt; i++)
-	{
-		cout<<back_space;
-	}
-	return 0 ;	
+
+//Method to handle receive messages from server to client
+void* handle_recv(void* arg){
+    int* client_socket=(int*) arg;
+    char buffer[BUFFER_LENGTH];
+    while(true){
+        int receive=recv(*client_socket, buffer, BUFFER_LENGTH,0);
+        if(receive>0){
+            cout<<buffer;
+            output_designer();
+        }
+        else if(receive==0){
+            break;
+        }
+        bzero(buffer,BUFFER_LENGTH);
+    }
+    catch_exit();
+    return NULL;
 }
 
-// Send message to everyone
-void send_message(int client_socket)
-{
-	while(1)
-	{
-		cout<<colors[1]<<"You : "<<def_col;
-		char str[MAX_LEN];
-		cin.getline(str,MAX_LEN);
-		send(client_socket,str,sizeof(str),0);
-		if(strcmp(str,"#exit")==0)
-		{
-			exit_flag=true;
-			t_recv.detach();	
-			close(client_socket);
-			return;
-		}	
-	}		
+
+//Method to handle sending of messages from client to server
+void* handle_send(void* arg){
+    int* client_socket=(int*) arg;
+    char buffer[BUFFER_LENGTH];
+    char message[BUFFER_LENGTH];
+    while(true){
+        output_designer();
+        fgets(buffer, BUFFER_LENGTH, stdin);
+        remove_newline(buffer,BUFFER_LENGTH);
+        if(strcmp(buffer,"E")==0){  
+            break;
+        }
+        else{
+            sprintf(message, "\033[1;%sm%s\033[0m: %s\n",colour_list[clr], username, buffer);
+            send(*client_socket, message, strlen(message),0);
+        }
+        bzero(buffer,BUFFER_LENGTH);
+        bzero(message,BUFFER_LENGTH+USERNAME_LENGTH);
+    }
+    flag=1;
+    return NULL;
 }
 
-// Receive message
-void recv_message(int client_socket)
-{
-	while(1)
-	{
-		if(exit_flag)
-			return;
-		char name[MAX_LEN], str[MAX_LEN];
-		int color_code;
-		int bytes_received=recv(client_socket,name,sizeof(name),0);
-		if(bytes_received<=0)
-			continue;
-		recv(client_socket,&color_code,sizeof(color_code),0);
-		recv(client_socket,str,sizeof(str),0);
-		eraseText(6);
-		if(strcmp(name,"#NULL")!=0)
-			cout<<color(color_code)<<name<<" : "<<def_col<<str<<endl;
-		else
-			cout<<color(color_code)<<str<<endl;
-		cout<<colors[1]<<"You : "<<def_col;
-		fflush(stdout);
-	}	
+
+int main(int argc, char **arg){
+
+    /* 
+    Port number can be specified as command-line argument for main(), 
+    in which case the value of argc will be 2, one for the name of the 
+    program and one for the specified port number on which the server 
+    has connected. In case no port number has been specified, default 
+    port number 9002 is taken.
+    */
+    
+    int port_number;  
+
+    if(argc==1){
+        port_number=9002;
+    }
+    else if(argc==2){
+        port_number=stoi(arg[1]);
+    }
+    else{
+        cout<<"ERROR: Port Number in "<<arg[0]<<endl;
+        return EXIT_FAILURE;
+    }
+
+    //Asking for username
+    cout<<"Enter username:";
+    fgets(username, USERNAME_LENGTH, stdin);
+    remove_newline(username, strlen(username));
+    if(strlen(username)>USERNAME_LENGTH || strlen(username)<2){
+        cout<<"Enter username correctly. It must be between 2 and "<<USERNAME_LENGTH<<" characters long."<<endl;
+        return EXIT_FAILURE;
+    }
+
+    //Creating the client socket
+    int client_socket;
+    client_socket=socket(AF_INET, SOCK_STREAM, 0);
+    if(client_socket==-1){
+        cout<<"ERROR: Socket Creation Failed"<<endl;
+        return EXIT_FAILURE;
+    }
+
+    //Specify server address for client socket to connect to
+    struct sockaddr_in server_address;
+    server_address.sin_family=AF_INET;
+    server_address.sin_port=htons(port_number);
+    server_address.sin_addr.s_addr=INADDR_ANY;
+
+    //Connecting with server
+    int connection_status=connect(client_socket,(struct sockaddr *) &server_address, sizeof(server_address));
+    if(connection_status==-1){
+        cout<<"ERROR: Connecting with server failed"<<endl;
+        return EXIT_FAILURE;
+    }
+
+    //Sending username to server
+    send(client_socket, username, USERNAME_LENGTH,0);
+
+    /*
+    Now, to ensure that each user has a unique username, the client sends
+    the entered username to the server and waits for the server to
+    send back permission to use the username. Character array permission[3]
+    will store permission received back from the server. The first element  
+    of the array 'Y' if permission given, 'N' if not given. The next two
+    elements will be the number fo people already present and chatting 
+    on the server.
+    */
+
+    char permission[3];      
+    recv(client_socket, permission, 3, 0);
+
+    if(permission[0]=='Y'){
+        cout<<"\033[1;34m-----------CHAT SERVER-----------\033[0m"<<endl;
+        cout<<"Welcome!!! Happy Chatting!\n"<<permission[1]<<permission[2]<<" people are already on the server";
+        cout<<"\nTo leave server, enter E)"<<endl;
+
+        //Giving the client a specific colour at random
+        srand(time(0));
+        clr=rand()%12;
+
+        /*
+        The client has to send messages to server and also receive messages sent
+        by the server. These two tasks can occur at any time, i.e, there no definite order 
+        in which these two tasks will be performed. Hence, we will run these 
+        two tasks/functions parallely using threads.
+        */
+
+        pthread_t recv_thread;
+        pthread_t send_thread;
+
+         //Creating thread to handle receive of messages from server
+        if(pthread_create(&recv_thread, NULL, handle_recv, &client_socket)!=0){
+            cout<<"ERROR: pthread creation failed"<<endl;
+            return EXIT_FAILURE;
+        }
+
+        //Creating thread to handle sending of messages to server from client
+        if(pthread_create(&send_thread, NULL, handle_send, &client_socket)!=0){
+            cout<<"ERROR: pthread creation failed"<<endl;
+            return EXIT_FAILURE;
+        }
+
+        while(true){
+            if(flag){
+                cout<<"Bye! See you soon!!!"<<endl;
+                break;
+            }
+        }
+    }
+    else{
+        cout<<"Username already in use. Try again.";
+    }
+
+    //Closing client socket
+    close(client_socket);
+
+    return EXIT_SUCCESS;
 }
