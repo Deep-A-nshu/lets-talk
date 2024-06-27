@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <pthread.h>
+#include <csignal>
 
 using namespace std;
 
